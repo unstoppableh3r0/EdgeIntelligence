@@ -1,38 +1,23 @@
 {
+    "similarity_threshold": 0.75,
+    "dedup_threshold": 0.95,
+    "max_memory_entries": 500,
+    "log_cooldown_seconds": 5,
+    "embedding_cache_size": 1000,
+    "batch_size": 4,
+    "connection_timeout": 2.0,
     "NODE_A": {
-        "ip": "192.168.1.10",
+        "ip": "10.12.77.190",
         "port": 5000,
-        "neighbors": [
-            "NODE_B",
-            "NODE_C",
-            "NODE_D"
-        ]
+        "neighbors": ["NODE_B"],
+        "camera_id": 0,
+        "description": "Laptop 1 - NODE_A (Your Laptop)"
     },
     "NODE_B": {
-        "ip": "192.168.1.11",
+        "ip": "10.12.67.195",
         "port": 5000,
-        "neighbors": [
-            "NODE_A",
-            "NODE_C",
-            "NODE_D"
-        ]
-    },
-    "NODE_C": {
-        "ip": "192.168.1.12",
-        "port": 5000,
-        "neighbors": [
-            "NODE_A",
-            "NODE_B",
-            "NODE_D"
-        ]
-    },
-    "NODE_D": {
-        "ip": "192.168.1.13",
-        "port": 5000,
-        "neighbors": [
-            "NODE_A",
-            "NODE_B",
-            "NODE_C"
-        ]
+        "neighbors": ["NODE_A"],
+        "camera_id": 0,
+        "description": "Laptop 7 - NODE_B (To Be Configured)"
     }
 }

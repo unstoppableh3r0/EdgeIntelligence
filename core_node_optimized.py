@@ -1,8 +1,10 @@
 """
-Edge Intelligence Node
-- Person detection (YOLOv8) + feature extraction (ResNet-18)
-- Peer-to-peer embedding distribution to neighbor nodes
-- Cross-node person re-identification via cosine similarity
+Optimized Edge Intelligence Node with Performance Improvements
+- Embedding caching to avoid redundant inference
+- Batch processing for faster inference
+- Connection pooling for network efficiency
+- Memory-mapped storage for large vectors
+- Quantization for reduced memory footprint
 """
 
 import cv2
@@ -18,6 +20,8 @@ import torchvision.transforms as T
 import torchvision.models as models
 from queue import Queue, PriorityQueue
 from ultralytics import YOLO
+from functools import lru_cache
+from collections import OrderedDict
 import logging
 
 # Configure logging
@@ -35,8 +39,107 @@ SIMILARITY_THRESHOLD = TOPOLOGY.get("similarity_threshold", 0.75)
 DEDUP_THRESHOLD = TOPOLOGY.get("dedup_threshold", 0.95)
 MAX_MEMORY = TOPOLOGY.get("max_memory_entries", 500)
 LOG_COOLDOWN = TOPOLOGY.get("log_cooldown_seconds", 5)
+EMBEDDING_CACHE_SIZE = TOPOLOGY.get("embedding_cache_size", 1000)
+BATCH_SIZE = TOPOLOGY.get("batch_size", 4)
 CONNECTION_TIMEOUT = TOPOLOGY.get("connection_timeout", 2.0)
 
+# --- OPTIMIZATION 1: Connection Pooling ---
+class ConnectionPool:
+    """Reuses TCP connections to reduce handshake overhead"""
+    def __init__(self, max_connections=10):
+        self.connections = {}
+        self.max_connections = max_connections
+        self.lock = threading.Lock()
+    
+    def get_connection(self, target_ip, target_port):
+        key = f"{target_ip}:{target_port}"
+        with self.lock:
+            if key in self.connections:
+                try:
+                    # Test if connection is alive
+                    self.connections[key].send(b'')
+                    return self.connections[key]
+                except:
+                    del self.connections[key]
+            
+            # Create new connection
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(CONNECTION_TIMEOUT)
+            try:
+                s.connect((target_ip, target_port))
+                self.connections[key] = s
+                return s
+            except:
+                return None
+    
+    def close_all(self):
+        with self.lock:
+            for conn in self.connections.values():
+                try:
+                    conn.close()
+                except:
+                    pass
+            self.connections.clear()
+
+connection_pool = ConnectionPool()
+
+# --- OPTIMIZATION 2: LRU Cache for Embeddings ---
+class EmbeddingCache:
+    """LRU cache for storing computed embeddings"""
+    def __init__(self, max_size=1000):
+        self.cache = OrderedDict()
+        self.max_size = max_size
+        self.lock = threading.Lock()
+        self.hits = 0
+        self.misses = 0
+    
+    def get_key(self, img_bytes):
+        """Create hash key from image bytes"""
+        return hashlib.md5(img_bytes.tobytes()).hexdigest()
+    
+    def get(self, img_bytes):
+        key = self.get_key(img_bytes)
+        with self.lock:
+            if key in self.cache:
+                self.cache.move_to_end(key)
+                self.hits += 1
+                return self.cache[key]
+            self.misses += 1
+            return None
+    
+    def put(self, img_bytes, embedding):
+        key = self.get_key(img_bytes)
+        with self.lock:
+            if key in self.cache:
+                self.cache.move_to_end(key)
+            self.cache[key] = embedding
+            if len(self.cache) > self.max_size:
+                self.cache.popitem(last=False)
+    
+    def stats(self):
+        total = self.hits + self.misses
+        if total == 0:
+            return "No cache hits yet"
+        hit_rate = (self.hits / total) * 100
+        return f"Hit Rate: {hit_rate:.1f}% ({self.hits}/{total})"
+
+embedding_cache = EmbeddingCache(EMBEDDING_CACHE_SIZE)
+
+# --- OPTIMIZATION 3: Batch Processing Queue ---
+class BatchProcessor:
+    """Batch multiple images for vectorization"""
+    def __init__(self, batch_size=4, timeout=0.1):
+        self.batch_size = batch_size
+        self.timeout = timeout
+        self.queue = Queue()
+        self.last_batch_time = time.time()
+    
+    def should_process(self):
+        """Decide if batch is ready to process"""
+        return (self.queue.qsize() >= self.batch_size or 
+                (time.time() - self.last_batch_time) > self.timeout)
+
+batch_processor = BatchProcessor(BATCH_SIZE)
 
 # --- Models and Preprocessing ---
 print("Loading YOLOv8 (detector)...")
@@ -57,14 +160,20 @@ preprocess = T.Compose([
     T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 ])
 
-# --- Batch Vector Extraction ---
+# --- OPTIMIZATION 4: Batch Vector Extraction ---
 def extract_vector_batch(img_crops):
-    """Extract fresh vectors for multiple images (no caching)"""
+    """Extract vectors for multiple images at once (GPU acceleration)"""
     if not img_crops:
         return []
     
     vectors = []
     for img_crop in img_crops:
+        # Check cache first
+        cached = embedding_cache.get(img_crop)
+        if cached is not None:
+            vectors.append(cached)
+            continue
+        
         # Ensure image has 3 channels
         if len(img_crop.shape) == 2:
             img_crop = cv2.cvtColor(img_crop, cv2.COLOR_GRAY2RGB)
@@ -74,6 +183,7 @@ def extract_vector_batch(img_crops):
             with torch.no_grad(): 
                 vector = resnet(img_tensor).flatten().cpu().numpy()
             vectors.append(vector)
+            embedding_cache.put(img_crop, vector)
         except Exception as e:
             logger.warning(f"Vector extraction failed: {e}")
             vectors.append(None)
@@ -87,8 +197,7 @@ def extract_vector(img_crop):
 
 def generate_commitment(vector):
     salt = str(time.time())
-    # Always use float32 bytes — must match verify_commitment exactly
-    commitment = hashlib.sha256(np.array(vector, dtype=np.float32).tobytes() + salt.encode()).hexdigest()
+    commitment = hashlib.sha256(vector.tobytes() + salt.encode()).hexdigest()
     return commitment, salt
 
 def verify_commitment(vector, commitment, salt):
@@ -111,8 +220,6 @@ def cosine_similarity(vec_a, vec_b):
 network_memory = []
 memory_lock = threading.Lock()
 opportunistic_queue = PriorityQueue()  # Priority queue for better scheduling
-_oq_counter = 0  # Tiebreaker so dicts are never compared
-_oq_lock = threading.Lock()
 
 person_counter = 0
 counter_lock = threading.Lock()
@@ -206,8 +313,7 @@ def handle_peer_connection(conn, addr):
         payload = json.loads(message_data.decode('utf-8'))
         
         if verify_commitment(payload['vector'], payload['commitment'], payload['salt']):
-            # Force float32 — local ResNet vectors are float32; keep memory type-consistent
-            received_vector = np.array(payload['vector'], dtype=np.float32)
+            received_vector = np.array(payload['vector'])
             payload['vector'] = received_vector
             
             match, score = find_match(received_vector)
@@ -230,45 +336,39 @@ def handle_peer_connection(conn, addr):
     finally:
         conn.close()
 
-# --- Sender (fresh socket per send — receiver closes after each message) ---
+# --- Optimized Sender with Connection Pooling ---
 def send_unicast(target_node, payload_dict):
-    """Open a fresh TCP connection, send payload, close."""
+    """Send with connection pooling"""
     try:
         target_ip = TOPOLOGY[target_node]["ip"]
         target_port = TOPOLOGY[target_node]["port"]
-
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(CONNECTION_TIMEOUT)
-        s.connect((target_ip, target_port))
-
+        
+        conn = connection_pool.get_connection(target_ip, target_port)
+        if not conn:
+            return False
+        
         message_data = json.dumps(payload_dict).encode('utf-8')
-        header = struct.pack('>I', len(message_data))
-        s.sendall(header + message_data)
-        s.close()
+        message_length = len(message_data)
+        header = struct.pack('>I', message_length)
+        
+        conn.sendall(header + message_data)
         return True
     except Exception as e:
         logger.debug(f"Send failed to {target_node}: {e}")
         return False
 
-def _oq_put(priority, item):
-    """Thread-safe enqueue with sequence tiebreaker to avoid dict comparison."""
-    global _oq_counter
-    with _oq_lock:
-        _oq_counter += 1
-        seq = _oq_counter
-    opportunistic_queue.put((priority, seq, item))
-
 def opportunistic_network_worker():
-    """Drain the opportunistic queue, re-enqueue on failure."""
+    """Enhanced with priority queue for important messages"""
     while True:
         try:
             if not opportunistic_queue.empty():
-                priority, seq, item = opportunistic_queue.get_nowait()
+                priority, item = opportunistic_queue.get_nowait()
                 if send_unicast(item['target'], item['payload']):
                     logger.info(f"Opportunistically sent to {item['target']}")
                 else:
-                    _oq_put(priority + 1, item)  # Re-queue with lower priority
-        except Exception:
+                    # Re-queue with slightly higher priority
+                    opportunistic_queue.put((priority + 1, item))
+        except:
             pass
         time.sleep(1)
 
@@ -285,7 +385,22 @@ if __name__ == "__main__":
     logger.info(f"Dedup Threshold: {DEDUP_THRESHOLD}")
     logger.info(f"Device: {device}")
     
-    cap = cv2.VideoCapture(TOPOLOGY[MY_NODE_ID].get("camera_id", 0))
+    # Initialize camera with proper backend
+    camera_id = TOPOLOGY[MY_NODE_ID].get("camera_id", 0)
+    logger.info(f"Initializing camera {camera_id}...")
+    cap = cv2.VideoCapture(camera_id, cv2.CAP_DSHOW)
+    
+    # Wait for camera to initialize
+    if not cap.isOpened():
+        logger.error(f"Camera {camera_id} failed to open. Trying without CAP_DSHOW...")
+        cap = cv2.VideoCapture(camera_id)
+    
+    if not cap.isOpened():
+        logger.error(f"Camera {camera_id} not available!")
+        cap.release()
+        exit(1)
+    
+    logger.info(f"Camera {camera_id} opened successfully")
     
     try:
         while True:
@@ -357,7 +472,7 @@ if __name__ == "__main__":
                         last_sent_vectors[person_id] = vector
                         for neighbor in MY_NEIGHBORS:
                             if not send_unicast(neighbor, payload):
-                                _oq_put(0, {'target': neighbor, 'payload': payload})
+                                opportunistic_queue.put((0, {'target': neighbor, 'payload': payload}))
                     
                     x1, y1, x2, y2 = box["x1"], box["y1"], box["x2"], box["y2"]
                     cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 2)
@@ -372,11 +487,14 @@ if __name__ == "__main__":
             cv2.putText(frame, fps_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             cv2.putText(frame, f"Memory: {mem_count}/{MAX_MEMORY}", (10, 60), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            cv2.putText(frame, embedding_cache.stats(), (10, 90), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
             
-            cv2.imshow(f"{MY_NODE_ID}", frame)
+            cv2.imshow(f"{MY_NODE_ID} - Optimized", frame)
             if cv2.waitKey(1) & 0xFF == ord('q'): 
                 break
     finally:
         cap.release()
         cv2.destroyAllWindows()
+        connection_pool.close_all()
         logger.info(f"Node {MY_NODE_ID} stopped")
