@@ -124,9 +124,9 @@ class CognitiveMeshNode:
                     fused_vector = self.fusion_engine.fuse(local_data['features'], feature_vector)
                     self.memory.put(match_id, fused_vector, time.time())
                     
-                    # Draw rect (Green for known)
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    cv2.putText(frame, match_id[:8], (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                    # Draw rect (Red for known/verified from mesh)
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                    cv2.putText(frame, match_id[:8], (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
                     
                     # Broadcast updated intelligence
                     self.network.broadcast_intelligence(match_id, fused_vector, time.time())
@@ -135,11 +135,11 @@ class CognitiveMeshNode:
                     # New Identity
                     new_id = str(uuid.uuid4())
                     self.memory.put(new_id, feature_vector, time.time())
-                    self.ui.log(f"Created new identity: {new_id[:8]}")
+                    self.ui.log(f"New Identity Captured: {new_id[:8]}")
                     
-                    # Draw rect (Red for new)
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
-                    cv2.putText(frame, new_id[:8], (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                    # Draw rect (Green for new)
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    cv2.putText(frame, new_id[:8], (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
                     
                     # Broadcast new intelligence
                     self.network.broadcast_intelligence(new_id, feature_vector, time.time())
