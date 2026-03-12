@@ -13,14 +13,18 @@ class StimulusLoader:
         self.image_files = []
         self.current_idx = 0
         
-        if os.path.isdir(source):
+        if isinstance(source, int) or (isinstance(source, str) and source.isdigit()):
+            # Live Webcam Feed
+            self.is_video = True
+            self.cap = cv2.VideoCapture(int(source))
+        elif os.path.isdir(source):
             self.image_files = sorted([os.path.join(source, f) for f in os.listdir(source) 
                                        if f.lower().endswith(('.png', '.jpg', '.jpeg'))])
         elif os.path.isfile(source):
             self.is_video = True
             self.cap = cv2.VideoCapture(source)
         else:
-            raise ValueError("Invalid source path. Must be a directory or video file.")
+            raise ValueError("Invalid source path. Must be a directory, video file, or camera index (e.g., 0).")
 
     def get_next_frame(self):
         """
