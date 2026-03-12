@@ -37,6 +37,7 @@ class P2PNode:
         )
 
     def add_peer(self, peer_host, peer_port):
+        peer_port = int(peer_port)
         peer_id = f"{peer_host}:{peer_port}"
         with self.peer_lock:
             if peer_id not in self.peers:
@@ -47,6 +48,9 @@ class P2PNode:
                     'connected': False,
                     'last_try': 0
                 }
+        
+        # Re-evaluate leadership now that the peer set has changed
+        self.election_engine.start_election()
 
     def start(self):
         self.running = True
@@ -113,6 +117,18 @@ class P2PNode:
         conn.close()
 
     def _process_incoming_payload(self, payload):
+        # Passive Discovery: Add sender to peers if not already known
+        sender_host = payload.get("sender_host")
+        sender_port = payload.get("sender_port")
+        if sender_host and sender_port:
+            peer_id = f"{sender_host}:{sender_port}"
+            # Don't add ourselves as a peer
+            if peer_id != f"{self.host}:{self.port}":
+                with self.peer_lock:
+                    if peer_id not in self.peers:
+                        # Use a thread so we don't block the receiver loop
+                        threading.Thread(target=self.add_peer, args=(sender_host, sender_port), daemon=True).start()
+
         if "type" in payload and payload["type"] in ["ELECTION", "OK", "VICTORY"]:
             self.election_engine.handle_message(payload)
             return
@@ -147,6 +163,8 @@ class P2PNode:
             "global_id": global_id,
             "timestamp": timestamp,
             "lamport_ts": self.lamport_clock,
+            "sender_host": self.host,
+            "sender_port": self.port,
             "vector": vector.tolist(),
             "hash": VectorCommitment.generate_commitment(vector, global_id, timestamp)
         }
@@ -225,8 +243,9 @@ class P2PNode:
             s.connect((host, port))
             s.sendall(framed_msg)
             s.close()
-        except:
-            pass
+        except Exception as e:
+            if self.ui_callback:
+                self.ui_callback("LOG", f"Election msg failed to {host}:{port}: {e}")
 
     def _attempt_connect(self, host, port):
         try:

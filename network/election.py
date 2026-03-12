@@ -31,6 +31,8 @@ class BullyElection:
         
         if not higher_nodes:
             self.declare_victory()
+            with self.lock:
+                self.is_election_ongoing = False
         else:
             for node in higher_nodes:
                 self.send_callback(node['host'], node['port'], {
