@@ -3,6 +3,7 @@ import cv2
 from PIL import Image
 import threading
 import time
+import queue
 
 class NerveCenterUI(ctk.CTk):
     def __init__(self, node_id, on_start_sim, on_add_peer):
@@ -19,7 +20,7 @@ class NerveCenterUI(ctk.CTk):
         self.log_messages = []
         
         # Thread-safe UI update queue
-        self.ui_queue = threading.Queue()
+        self.ui_queue = queue.Queue()
         self._process_ui_queue()
         
     def _process_ui_queue(self):

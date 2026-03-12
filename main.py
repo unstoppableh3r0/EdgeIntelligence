@@ -126,7 +126,7 @@ class CognitiveMeshNode:
                 # Try to Re-ID locally
                 match_id, similarity = self.tracker.match(feature_vector, self.memory)
                 
-        if match_id is not None:
+                if match_id is not None:
                     # Known identity - Fuse & Update
                     self.ui.log_match(match_id, similarity)
                     local_data = self.memory.get(match_id)
