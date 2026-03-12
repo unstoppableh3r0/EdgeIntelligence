@@ -82,6 +82,15 @@ class CognitiveMeshNode:
                 self.memory.put(global_id, incoming_vector, time.time())
                 self.ui.log(f"NEW DB: {global_id[:8]}")
 
+        elif event_type == "CLOCK":
+            self.ui.update_clock(data)
+            
+        elif event_type == "COORDINATOR":
+            self.ui.update_coordinator(data)
+            
+        elif event_type == "QUEUE_STATUS":
+            self.ui.update_queues(data)
+
     def start_stimulus_simulation(self):
         if self.sim_thread and self.sim_thread.is_alive():
             self.ui.log("Simulation already running.")

@@ -7,6 +7,7 @@ import numpy as np
 
 from network.message_queue import ThreadSafeQueue
 from network.security import VectorCommitment
+from network.election import BullyElection
 
 class P2PNode:
     def __init__(self, host, port, ui_callback=None):
@@ -24,6 +25,16 @@ class P2PNode:
         self.running = False
         self.server_thread = None
         self.flush_thread = None
+        self.lamport_clock = 0
+        
+        self.coordinator = None
+        self.election_engine = BullyElection(
+            host=self.host, 
+            port=self.port, 
+            peers=self.peers, 
+            send_callback=self._send_election_msg,
+            ui_callback=self.ui_callback
+        )
 
     def add_peer(self, peer_host, peer_port):
         peer_id = f"{peer_host}:{peer_port}"
@@ -50,6 +61,9 @@ class P2PNode:
         
         if self.ui_callback:
             self.ui_callback("LOG", f"Node started on {self.host}:{self.port}")
+        
+        # Start initial election
+        threading.Timer(2.0, self.election_engine.start_election).start()
 
     def stop(self):
         self.running = False
@@ -99,6 +113,10 @@ class P2PNode:
         conn.close()
 
     def _process_incoming_payload(self, payload):
+        if "type" in payload and payload["type"] in ["ELECTION", "OK", "VICTORY"]:
+            self.election_engine.handle_message(payload)
+            return
+
         # Verify SHA-256
         global_id = payload.get("global_id")
         timestamp = payload.get("timestamp")
@@ -109,6 +127,9 @@ class P2PNode:
         is_valid = VectorCommitment.verify_commitment(vector, global_id, timestamp, provided_hash)
         
         if is_valid and self.ui_callback:
+            received_ts = payload.get("lamport_ts", 0)
+            self.lamport_clock = max(self.lamport_clock, received_ts) + 1
+            self.ui_callback("CLOCK", self.lamport_clock)
             self.ui_callback("PULSE", {"global_id": global_id, "vector": vector, "valid": True})
         elif not is_valid and self.ui_callback:
             self.ui_callback("LOG", f"Tampering detected! Invalid hash for {global_id}")
@@ -118,9 +139,14 @@ class P2PNode:
         Called when local ML extracts a feature ghost.
         Broadcasts to all known peers.
         """
+        self.lamport_clock += 1
+        if self.ui_callback:
+            self.ui_callback("CLOCK", self.lamport_clock)
+
         payload = {
             "global_id": global_id,
             "timestamp": timestamp,
+            "lamport_ts": self.lamport_clock,
             "vector": vector.tolist(),
             "hash": VectorCommitment.generate_commitment(vector, global_id, timestamp)
         }
@@ -139,10 +165,12 @@ class P2PNode:
         Periodically checks queues and attempts to flush them to peers.
         """
         while self.running:
+            queue_status = {}
             with self.peer_lock:
                 peer_items = list(self.peers.items())
                 
             for peer_id, peer_info in peer_items:
+                queue_status[peer_id] = peer_info['queue'].qsize()
                 if not peer_info['queue'].is_empty():
                     # Attempt connection if not connected (debounced)
                     now = time.time()
@@ -154,6 +182,12 @@ class P2PNode:
                             peer_info['socket'] = s
                             if self.ui_callback:
                                 self.ui_callback("PEER_UP", peer_id)
+                        else:
+                            if self.ui_callback:
+                                self.ui_callback("PEER_DOWN", peer_id)
+                            # If coordinator is unreachable, start election
+                            if self.election_engine.coordinator == peer_id:
+                                self.election_engine.start_election()
                                 
                     # If connected, flush queue
                     if peer_info['connected']:
@@ -167,10 +201,32 @@ class P2PNode:
                             peer_info['socket'].close()
                             if self.ui_callback:
                                 self.ui_callback("PEER_DOWN", peer_id)
+                            
+                            # If coordinator went down, start election
+                            if self.election_engine.coordinator == peer_id:
+                                self.election_engine.start_election()
+                                
                             for msg in messages:
                                 peer_info['queue'].enqueue(msg) # Re-queue
+            
+            if self.ui_callback:
+                self.ui_callback("QUEUE_STATUS", queue_status)
                                 
             time.sleep(1) # check queues every second
+
+    def _send_election_msg(self, host, port, payload):
+        """ Direct message sending for election control (bypasses main queue if needed) """
+        try:
+            msg_bytes = json.dumps(payload).encode('utf-8')
+            framed_msg = struct.pack('>I', len(msg_bytes)) + msg_bytes
+            
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(1.0)
+            s.connect((host, port))
+            s.sendall(framed_msg)
+            s.close()
+        except:
+            pass
 
     def _attempt_connect(self, host, port):
         try:

@@ -17,6 +17,7 @@ class NerveCenterUI(ctk.CTk):
         
         self._build_ui()
         self.log_messages = []
+        self.queues = {}
         
     def _build_ui(self):
         # Top panel: Controls
@@ -31,6 +32,16 @@ class NerveCenterUI(ctk.CTk):
         
         self.sim_btn = ctk.CTkButton(self.control_frame, text="Start Stimulus", command=self.on_start_sim)
         self.sim_btn.pack(side="right", padx=10)
+        
+        # Status Bar: Clock & Coordinator
+        self.status_bar = ctk.CTkFrame(self, height=40, fg_color="transparent")
+        self.status_bar.pack(pady=5, padx=10, fill="x")
+        
+        self.clock_label = ctk.CTkLabel(self.status_bar, text="Lamport Clock: 0", font=("Arial", 14, "bold"), text_color="#00FF00")
+        self.clock_label.pack(side="left", padx=20)
+        
+        self.coord_label = ctk.CTkLabel(self.status_bar, text="Coordinator: Unknown", font=("Arial", 14), text_color="#3399FF")
+        self.coord_label.pack(side="right", padx=20)
         
         # Middle panel: Video & Matches
         self.middle_frame = ctk.CTkFrame(self)
@@ -53,7 +64,16 @@ class NerveCenterUI(ctk.CTk):
         self.bottom_frame.pack(pady=10, padx=10, fill="x")
         
         self.log_text = ctk.CTkTextbox(self.bottom_frame, height=150)
-        self.log_text.pack(fill="x", padx=10, pady=10)
+        self.log_text.pack(side="left", fill="both", expand=True, padx=10, pady=10)
+        
+        self.queue_frame = ctk.CTkFrame(self.bottom_frame, width=200)
+        self.queue_frame.pack(side="right", fill="y", padx=10, pady=10)
+        
+        self.queue_label = ctk.CTkLabel(self.queue_frame, text="Peer Queues", font=("Arial", 12, "bold"))
+        self.queue_label.pack(pady=5)
+        
+        self.queue_text = ctk.CTkTextbox(self.queue_frame, width=180, height=100, font=("Consolas", 10))
+        self.queue_text.pack(pady=5)
         
     def _handle_add_peer(self):
         peer_addr = self.peer_entry.get()
@@ -86,3 +106,14 @@ class NerveCenterUI(ctk.CTk):
         msg = f"Match! ID: {global_id} | Sim: {similarity:.2f}"
         self.match_text.insert("end", msg + "\n")
         self.match_text.see("end")
+
+    def update_clock(self, ts):
+        self.clock_label.configure(text=f"Lamport Clock: {ts}")
+
+    def update_coordinator(self, coord):
+        self.coord_label.configure(text=f"Coordinator: {coord}")
+
+    def update_queues(self, status):
+        self.queue_text.delete("0.0", "end")
+        for peer, count in status.items():
+            self.queue_text.insert("end", f"{peer}: {count}\n")
