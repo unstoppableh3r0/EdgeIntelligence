@@ -23,7 +23,7 @@ class CognitiveMeshNode:
         self.ml_engine = MLEngine()
         self.feature_extractor = FeatureExtractor()
         self.fusion_engine = FeatureFusion(alpha=0.3)
-        self.tracker = ReIDTracker(similarity_threshold=0.65)
+        self.tracker = ReIDTracker(similarity_threshold=0.80)
         self.memory = LRUMemory(max_size=100)
         self.stimulus_loader = StimulusLoader(stimulus_source)
         
@@ -161,7 +161,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=5001)
-    parser.add_argument("--source", default="data/vtest.avi", help="Path to video or image directory")
+    parser.add_argument("--source", default="1", help="Path to video or image directory")
     args = parser.parse_args()
     
     node = CognitiveMeshNode(args.host, args.port, args.source)
