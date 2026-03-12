@@ -42,7 +42,7 @@ class BullyElection:
                 })
             
             # Use a timer to wait for any OK message
-            threading.Timer(2.0, self._check_election_results).start()
+            threading.Timer(3.0, self._check_election_results).start()
 
     def _check_election_results(self):
         with self.lock:
@@ -79,7 +79,7 @@ class BullyElection:
     def declare_victory(self):
         self.coordinator = f"{self.host}:{self.port}"
         self.ui_callback("COORDINATOR", self.coordinator)
-        self.ui_callback("LOG", f"I am the leader ({self.port})")
+        self.ui_callback("LOG", f"ELECTION WON: Node {self.port} is Leader")
         
         for peer_id, info in self.peers.items():
             self.send_callback(info['host'], info['port'], {

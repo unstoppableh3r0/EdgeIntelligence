@@ -23,7 +23,7 @@ class CognitiveMeshNode:
         self.ml_engine = MLEngine()
         self.feature_extractor = FeatureExtractor()
         self.fusion_engine = FeatureFusion(alpha=0.3)
-        self.tracker = ReIDTracker(similarity_threshold=0.80)
+        self.tracker = ReIDTracker(similarity_threshold=0.85)
         self.memory = LRUMemory(max_size=100)
         self.stimulus_loader = StimulusLoader(stimulus_source)
         
@@ -126,7 +126,7 @@ class CognitiveMeshNode:
                 # Try to Re-ID locally
                 match_id, similarity = self.tracker.match(feature_vector, self.memory)
                 
-                if match_id is not None:
+        if match_id is not None:
                     # Known identity - Fuse & Update
                     self.ui.log_match(match_id, similarity)
                     local_data = self.memory.get(match_id)
@@ -135,7 +135,8 @@ class CognitiveMeshNode:
                     
                     # Draw rect (Red for known/verified from mesh)
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
-                    cv2.putText(frame, match_id[:8], (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                    label = f"{match_id[:8]} ({similarity:.2f})"
+                    cv2.putText(frame, label, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
                     
                     # Broadcast updated intelligence
                     self.network.broadcast_intelligence(match_id, fused_vector, time.time())

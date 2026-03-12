@@ -17,7 +17,22 @@ class NerveCenterUI(ctk.CTk):
         
         self._build_ui()
         self.log_messages = []
-        self.queues = {}
+        
+        # Thread-safe UI update queue
+        self.ui_queue = threading.Queue()
+        self._process_ui_queue()
+        
+    def _process_ui_queue(self):
+        """Processes all pending UI updates in the main thread."""
+        try:
+            while True:
+                task = self.ui_queue.get_nowait()
+                func = task[0]
+                args = task[1:]
+                func(*args)
+        except:
+            pass
+        self.after(50, self._process_ui_queue)
         
     def _build_ui(self):
         # Top panel: Controls
@@ -76,14 +91,26 @@ class NerveCenterUI(ctk.CTk):
         self.queue_text.pack(pady=5)
         
     def _handle_add_peer(self):
-        peer_addr = self.peer_entry.get()
-        if peer_addr and ":" in peer_addr:
-            ip, port = peer_addr.split(":")
-            self.on_add_peer(ip, int(port))
-            self.log(f"Added peer target {ip}:{port}")
-            self.peer_entry.delete(0, 'end')
-            
+        peer_addr = self.peer_entry.get().strip()
+        if peer_addr:
+            try:
+                if ":" in peer_addr:
+                    ip, port_str = peer_addr.split(":", 1)
+                    port = int(port_str)
+                else:
+                    ip = peer_addr
+                    port = 5001 # Default port
+                    
+                self.on_add_peer(ip, port)
+                self.log(f"Added peer target {ip}:{port}")
+                self.peer_entry.delete(0, 'end')
+            except Exception as e:
+                self.log(f"Error adding peer: {e}")
+
     def update_frame(self, frame_bgr):
+        self.ui_queue.put((self._do_update_frame, frame_bgr))
+
+    def _do_update_frame(self, frame_bgr):
         # Convert BGR to RGB
         frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         image = Image.fromarray(frame_rgb)
@@ -93,6 +120,9 @@ class NerveCenterUI(ctk.CTk):
         self.video_label.configure(image=ctk_image, text="")
         
     def log(self, msg):
+        self.ui_queue.put((self._do_log, msg))
+
+    def _do_log(self, msg):
         self.log_messages.append(msg)
         if len(self.log_messages) > 100:
             self.log_messages.pop(0)
@@ -103,17 +133,29 @@ class NerveCenterUI(ctk.CTk):
         self.log_text.see("end")
         
     def log_match(self, global_id, similarity):
-        msg = f"Match! ID: {global_id} | Sim: {similarity:.2f}"
+        self.ui_queue.put((self._do_log_match, global_id, similarity))
+
+    def _do_log_match(self, global_id, similarity):
+        msg = f"Match! ID: {global_id[:8]} | Sim: {similarity:.2f}"
         self.match_text.insert("end", msg + "\n")
         self.match_text.see("end")
 
     def update_clock(self, ts):
+        self.ui_queue.put((self._do_update_clock, ts))
+
+    def _do_update_clock(self, ts):
         self.clock_label.configure(text=f"Lamport Clock: {ts}")
 
     def update_coordinator(self, coord):
+        self.ui_queue.put((self._do_update_coordinator, coord))
+
+    def _do_update_coordinator(self, coord):
         self.coord_label.configure(text=f"Coordinator: {coord}")
 
     def update_queues(self, status):
+        self.ui_queue.put((self._do_update_queues, status))
+
+    def _do_update_queues(self, status):
         self.queue_text.delete("0.0", "end")
         for peer, count in status.items():
             self.queue_text.insert("end", f"{peer}: {count}\n")

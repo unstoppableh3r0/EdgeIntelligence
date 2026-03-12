@@ -114,6 +114,10 @@ class P2PNode:
                 # Fix distributed routing by resolving 0.0.0.0 to the actual socket IP
                 if payload.get("sender_host") == "0.0.0.0":
                     payload["sender_host"] = addr[0]
+                
+                # Normalize localhost for consistency
+                if payload.get("sender_host") in ["::1", "localhost"]:
+                    payload["sender_host"] = "127.0.0.1"
                     
                 self._process_incoming_payload(payload)
                 
